@@ -73,6 +73,28 @@ const (
 	// New for branch switching
 	TypeSwitchBranchRequest  = "SWITCH_BRANCH_REQUEST"
 	TypeSwitchBranchResponse = "SWITCH_BRANCH_RESPONSE"
+
+	// New for git status
+	TypeGitStatusRequest  = "GIT_STATUS_REQUEST"
+	TypeGitStatusResponse = "GIT_STATUS_RESPONSE"
+
+	// New for git log
+	TypeGitLogRequest  = "GIT_LOG_REQUEST"
+	TypeGitLogResponse = "GIT_LOG_RESPONSE"
+
+	// New for git diff
+	TypeGitDiffRequest  = "GIT_DIFF_REQUEST"
+	TypeGitDiffResponse = "GIT_DIFF_RESPONSE"
+
+	// New for git stash
+	TypeGitStashSaveRequest  = "GIT_STASH_SAVE_REQUEST"
+	TypeGitStashSaveResponse = "GIT_STASH_SAVE_RESPONSE"
+	TypeGitStashPopRequest   = "GIT_STASH_POP_REQUEST"
+	TypeGitStashPopResponse  = "GIT_STASH_POP_RESPONSE"
+
+	// New for git reset
+	TypeGitResetRequest  = "GIT_RESET_REQUEST"
+	TypeGitResetResponse = "GIT_RESET_RESPONSE"
 )
 
 // New Payloads
@@ -161,6 +183,66 @@ type SwitchBranchRequestPayload struct {
 type SwitchBranchResponsePayload struct {
 	Success bool   `json:"success"`
 	Output  string `json:"output"` // To return git's output
+}
+
+// Add new payloads
+type GitStatusRequestPayload struct {
+	RepoPath string `json:"repo_path"`
+}
+
+type GitStatusResponsePayload struct {
+	Success bool   `json:"success"`
+	Output  string `json:"output"`
+}
+
+// Add new payloads
+type GitLogRequestPayload struct {
+	RepoPath string `json:"repo_path"`
+}
+
+type GitLogResponsePayload struct {
+	Success bool   `json:"success"`
+	Output  string `json:"output"`
+}
+
+// Add new payloads
+type GitDiffRequestPayload struct {
+	RepoPath string `json:"repo_path"`
+	FilePath string `json:"file_path,omitempty"` // Optional file path
+}
+
+type GitDiffResponsePayload struct {
+	Success bool   `json:"success"`
+	Output  string `json:"output"`
+}
+
+// Add new payloads
+type GitStashSaveRequestPayload struct {
+	RepoPath string `json:"repo_path"`
+}
+
+type GitStashSaveResponsePayload struct {
+	Success bool   `json:"success"`
+	Output  string `json:"output"`
+}
+
+type GitStashPopRequestPayload struct {
+	RepoPath string `json:"repo_path"`
+}
+
+type GitStashPopResponsePayload struct {
+	Success bool   `json:"success"`
+	Output  string `json:"output"`
+}
+
+// Add new payloads
+type GitResetRequestPayload struct {
+	RepoPath string `json:"repo_path"`
+}
+
+type GitResetResponsePayload struct {
+	Success bool   `json:"success"`
+	Output  string `json:"output"`
 }
 
 // ReadMessage reads a JSON message from a stream.

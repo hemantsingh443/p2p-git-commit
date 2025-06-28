@@ -9,13 +9,74 @@ A peer-to-peer Git remote and command relay system using Go and libp2p. This pro
 - **Peer-to-peer Git remote**: Push, commit, and manage repositories over libp2p
 - **Interactive REPL client**: SSH-like command interface with tab completion
 - **Multi-repo support**: Manage multiple Git repositories through a single daemon
-- **File operations**: List, read, edit, and rename files remotely
-- **Branch management**: Create, list, and switch between branches
+- **File operations**: List, read, edit, and rename files remotely (now using `git mv` for Git-aware renames)
+- **Branch management**: Create, list, and switch between branches (with smart, stash-aware switching)
 - **Dynamic repo linking**: Add repositories without restarting the daemon
 - **Persistent identity**: Secure, repeatable identity with private keys
 - **Trust model**: Handshake approval for new clients (like SSH)
 - **Security**: Path traversal protection and repository aliasing
 - **Debug logging**: Comprehensive logging for troubleshooting
+- **Smart config manager**: One-time linking of daemons by name, with persistent config
+- **Advanced stash and reset**: Stash (with untracked files), stash-pop, and destructive reset for recovery
+
+## New: Smart Daemon Linking & Config Manager
+
+You only need to handle the long multiaddress once per daemon. After linking, you can connect by name:
+
+### Linking a New Daemon
+```bash
+./client link my-desktop
+# Please scan or paste the multiaddress for 'my-desktop':
+# (Paste the address from the daemon's console)
+# Successfully linked 'my-desktop'. You can now connect using './client my-desktop'
+```
+
+### Connecting to a Linked Daemon
+```bash
+./client my-desktop
+# Instantly connects using the saved address in ~/.p2p-git/config.json
+```
+
+### Config File Example
+```json
+{
+  "my-desktop": "/ip4/192.168.1.100/tcp/4001/p2p/QmX...",
+  "my-laptop": "/ip4/192.168.1.101/tcp/4001/p2p/QmY..."
+}
+```
+
+## Advanced Workflow Features
+
+- **Smart branch switching**: Automatically stashes work on the old branch and restores work for the new branch, so your changes follow your workflow intuitively.
+- **Git-aware renames**: The `rename` command uses `git mv` to preserve file history and proper tracking.
+- **Powerful stash**: The `stash` command includes untracked files, and `stash-pop` restores them.
+- **Destructive reset**: The `reset` command (with confirmation) discards all local changes and resets the repo to the last commit—useful for escaping merge conflicts or stuck states.
+- **Colorized output**: Errors, warnings, and results are color-coded for clarity.
+
+## Example Usage
+
+```bash
+# Link a new daemon (one-time setup)
+./client link my-desktop
+
+# Connect to a daemon by name
+./client my-desktop
+
+# Rename a file (Git-aware)
+rename old.txt new.txt
+
+# Stash changes (including untracked)
+stash
+
+# Switch branches (auto-stash and restore)
+switch feature-branch
+
+# Pop the stash
+stash-pop
+
+# Destructive reset (with confirmation)
+reset
+```
 
 ## Multi-Repository Support
 
@@ -57,10 +118,13 @@ Switched to repo: new-repo
 
 ## Recent Additions
 
-- **Branch switching**: `switch <branch>` now actually changes the daemon's branch
+- **Branch switching**: `switch <branch>` now actually changes the daemon's branch and auto-stashes/restores work
 - **Dynamic repo linking**: `link <alias> <path>` adds repos without daemon restart
 - **Smart validation**: Commands validate operations before changing client state
 - **Persistent storage**: Repositories saved to `linked_repos.json` for persistence
+- **Git-aware rename**: `rename` uses `git mv` for proper history
+- **Stash improvements**: Stash includes untracked files
+- **Destructive reset**: `reset` command for emergency recovery
 
 ## SSH-like Usage & Testing
 

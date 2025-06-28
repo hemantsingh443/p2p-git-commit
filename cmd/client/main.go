@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -8,9 +9,12 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"os/user"
+	"path/filepath"
 	"strings"
 
 	"github.com/c-bata/go-prompt"
+	"github.com/fatih/color"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -31,53 +35,138 @@ type clientState struct {
 	livePrefix    string
 }
 
-func main() {
-	// Only one flag needed now: the daemon's address
-	if len(os.Args) < 2 {
-		log.Fatal("Usage: ./client <daemon-multiaddress>")
-	}
-	daemonAddr := os.Args[1]
+type ClientConfig map[string]string
 
+type ConfigManager struct {
+	Path   string
+	Config ClientConfig
+}
+
+func NewConfigManager() (*ConfigManager, error) {
+	home, err := user.Current()
+	if err != nil {
+		return nil, fmt.Errorf("could not find home directory: %w", err)
+	}
+	configPath := filepath.Join(home.HomeDir, ".p2p-git", "config.json")
+
+	// Ensure the directory exists
+	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+		return nil, fmt.Errorf("could not create config directory: %w", err)
+	}
+
+	cm := &ConfigManager{Path: configPath, Config: make(ClientConfig)}
+	return cm, cm.Load()
+}
+
+func (cm *ConfigManager) Load() error {
+	data, err := os.ReadFile(cm.Path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// File doesn't exist, which is fine. Start with an empty config.
+			return nil
+		}
+		return fmt.Errorf("could not read config file: %w", err)
+	}
+	return json.Unmarshal(data, &cm.Config)
+}
+
+func (cm *ConfigManager) Save() error {
+	data, err := json.MarshalIndent(cm.Config, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(cm.Path, data, 0644)
+}
+
+func (cm *ConfigManager) AddDaemon(name, addr string) {
+	cm.Config[name] = addr
+}
+
+func main() {
+	if len(os.Args) < 2 {
+		// Updated usage message
+		fmt.Println("Usage: ./client <daemon-name> | link <new-daemon-name>")
+		os.Exit(1)
+	}
+
+	command := os.Args[1]
+
+	configManager, err := NewConfigManager()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// --- MODE 1: Linking a new daemon ---
+	if command == "link" {
+		if len(os.Args) < 3 {
+			fmt.Println("Usage: ./client link <new-daemon-name>")
+			os.Exit(1)
+		}
+		daemonName := os.Args[2]
+
+		// Prompt the user for the multiaddress
+		fmt.Printf("Please scan or paste the multiaddress for '%s':\n> ", daemonName)
+		reader := bufio.NewReader(os.Stdin)
+		daemonAddr, _ := reader.ReadString('\n')
+		daemonAddr = strings.TrimSpace(daemonAddr)
+
+		// Validate the address before saving
+		if _, err := multiaddr.NewMultiaddr(daemonAddr); err != nil {
+			color.Red("Error: Invalid multiaddress provided. Aborting.")
+			os.Exit(1)
+		}
+
+		configManager.AddDaemon(daemonName, daemonAddr)
+		if err := configManager.Save(); err != nil {
+			color.Red("Failed to save config: %v", err)
+			os.Exit(1)
+		}
+		color.Green("Successfully linked '%s'. You can now connect using './client %s'", daemonName, daemonName)
+		return // Exit after linking
+	}
+
+	// --- MODE 2: Connecting to an existing daemon ---
+	daemonName := command
+	daemonAddr, ok := configManager.Config[daemonName]
+	if !ok {
+		color.Red("Error: Daemon name '%s' not found in your config file.", daemonName)
+		fmt.Println("Use './client link <name>' to add it.")
+		os.Exit(1)
+	}
+
+	// --- The rest of the main function remains the same ---
+	// It connects and starts the REPL using `daemonAddr` from the config.
 	ctx := context.Background()
 
-	// --- Setup P2P Host and Trust ---
+	// Load or generate persistent identity
 	privKey, err := p2p.LoadOrGeneratePrivateKey("client_identity.key")
 	if err != nil {
 		log.Fatalf("Failed to get private key: %v", err)
 	}
 
-	h, err := p2p.CreateHost(ctx, privKey, 0)
+	// Create libp2p host
+	h, err := p2p.CreateHost(ctx, privKey, 0) // Port 0 means random port
 	if err != nil {
 		log.Fatalf("Failed to create host: %v", err)
 	}
 	defer h.Close()
 
-	go func() {
-		if err := p2p.StartDiscovery(ctx, h); err != nil {
-			log.Printf("Warning: Discovery failed: %v", err)
-		}
-	}()
-
-	maddr, err := multiaddr.NewMultiaddr(daemonAddr)
+	// Parse the daemon's multiaddress
+	addrInfo, err := peer.AddrInfoFromString(daemonAddr)
 	if err != nil {
-		log.Fatalf("Invalid multiaddress: %v", err)
+		log.Fatalf("Failed to parse daemon address: %v", err)
 	}
 
-	addrInfo, err := peer.AddrInfoFromP2pAddr(maddr)
-	if err != nil {
-		log.Fatalf("Failed to parse peer address info: %v", err)
-	}
-
-	trustStore, err := store.NewTrustStore("client_trusted_daemon.json")
-	if err != nil {
-		log.Fatalf("Failed to open client trust store: %v", err)
-	}
-
-	// --- Connect and Handshake if needed ---
+	// Connect to the daemon
 	if err := h.Connect(ctx, *addrInfo); err != nil {
 		log.Fatalf("Failed to connect to daemon: %v", err)
 	}
-	fmt.Println("Connection to daemon established.")
+
+	// Initialize TrustStore
+	trustStore, err := store.NewTrustStore("trusted_daemons.json")
+	if err != nil {
+		log.Fatalf("Failed to initialize trust store: %v", err)
+	}
 
 	if !trustStore.IsTrusted(addrInfo.ID) {
 		performHandshake(ctx, h, *addrInfo, trustStore)
@@ -212,6 +301,46 @@ func executor(state *clientState) func(s string) {
 				return
 			}
 			handleRenameFile(stream, state.currentRepo, args[0], args[1])
+		case "status":
+			if state.currentRepo == "" {
+				fmt.Println("No repository selected.")
+				return
+			}
+			handleGitStatus(stream, state.currentRepo)
+		case "log":
+			if state.currentRepo == "" {
+				fmt.Println("No repository selected.")
+				return
+			}
+			handleGitLog(stream, state.currentRepo)
+		case "diff":
+			if state.currentRepo == "" {
+				fmt.Println("No repository selected.")
+				return
+			}
+			filePath := ""
+			if len(args) > 0 {
+				filePath = args[0]
+			}
+			handleGitDiff(stream, state.currentRepo, filePath)
+		case "stash":
+			if state.currentRepo == "" {
+				fmt.Println("No repository selected.")
+				return
+			}
+			handleGitStashSave(stream, state.currentRepo)
+		case "stash-pop":
+			if state.currentRepo == "" {
+				fmt.Println("No repository selected.")
+				return
+			}
+			handleGitStashPop(stream, state.currentRepo)
+		case "reset":
+			if state.currentRepo == "" {
+				fmt.Println("No repository selected.")
+				return
+			}
+			handleGitReset(stream, state.currentRepo)
 
 		// --- Commands that need context but not a direct stream ---
 		case "cat":
@@ -283,17 +412,17 @@ func handleListRepos(stream network.Stream) {
 	protocol.WriteMessage(stream, req)
 	resp, err := protocol.ReadMessage(stream)
 	if err != nil {
-		fmt.Printf("Error reading response: %v\n", err)
+		color.Red("Error reading response: %v", err)
 		return
 	}
 
 	var payload protocol.ListReposResponsePayload
 	json.Unmarshal(resp.Payload, &payload)
-	fmt.Println("--- Available Repositories ---")
+	color.Cyan("--- Available Repositories ---")
 	for _, repo := range payload.Repos {
-		fmt.Printf("- %s\n", repo)
+		color.Yellow("- %s", repo)
 	}
-	fmt.Println("------------------------------")
+	color.Cyan("------------------------------")
 }
 
 func handleListFiles(stream network.Stream, repoAlias string) {
@@ -302,34 +431,36 @@ func handleListFiles(stream network.Stream, repoAlias string) {
 	payloadBytes, _ := json.Marshal(reqPayload)
 	req := &protocol.Message{Type: protocol.TypeListFilesRequest, Payload: payloadBytes}
 	if err := protocol.WriteMessage(stream, req); err != nil {
-		fmt.Printf("Error sending 'ls' request: %v\n", err)
+		color.Red("Error sending 'ls' request: %v", err)
 		return
 	}
 
 	// 2. Read the response from the daemon
 	resp, err := protocol.ReadMessage(stream)
 	if err != nil {
-		fmt.Printf("Error reading 'ls' response: %v\n", err)
+		color.Red("Error reading 'ls' response: %v", err)
 		return
 	}
 
 	// 3. Unmarshal the response payload
 	var respPayload protocol.ListFilesResponsePayload
 	if err := json.Unmarshal(resp.Payload, &respPayload); err != nil {
-		fmt.Printf("Error parsing 'ls' response payload: %v\n", err)
+		color.Red("Error parsing 'ls' response payload: %v", err)
 		return
 	}
 
 	// 4. Check for an error message from the daemon
 	if !respPayload.Success {
-		fmt.Printf("Error from daemon: %s\n", respPayload.Error)
+		color.Red("Error from daemon: %s", respPayload.Error)
 		return
 	}
 
 	// 5. THIS IS THE CRITICAL PART: Print the files
+	color.Cyan("--- Files in Repository ---")
 	for _, file := range respPayload.Files {
-		fmt.Println(file)
+		color.White(file)
 	}
+	color.Cyan("---------------------------")
 }
 
 func handleCreateBranch(stream network.Stream, state *clientState, newBranch string) {
@@ -512,24 +643,35 @@ func handleEditFile(ctx context.Context, state *clientState, filePath string) {
 	}
 }
 
-func handleCommit(stream network.Stream, repo, branch, msg string) {
-	gitPayload := protocol.GitCommitRequestPayload{RepoPath: repo, Message: msg, Branch: branch}
-	payloadBytes, _ := json.Marshal(gitPayload)
-	gitReq := &protocol.Message{Type: protocol.TypeGitCommitRequest, Payload: payloadBytes}
-	protocol.WriteMessage(stream, gitReq)
-
-	gitResponse, _ := protocol.ReadMessage(stream)
-	var respPayload protocol.GitCommitResponsePayload
-	json.Unmarshal(gitResponse.Payload, &respPayload)
-
-	fmt.Println("--- Git Command Response from Daemon ---")
-	if respPayload.Success {
-		fmt.Println("Status: SUCCESS")
-	} else {
-		fmt.Println("Status: FAILED")
+func handleCommit(stream network.Stream, repoAlias, branch, message string) {
+	reqPayload := protocol.GitCommitRequestPayload{
+		RepoPath: repoAlias,
+		Message:  message,
+		Branch:   branch,
 	}
-	fmt.Printf("Output:\n%s\n", respPayload.Output)
-	fmt.Println("----------------------------------------")
+	payloadBytes, _ := json.Marshal(reqPayload)
+	req := &protocol.Message{Type: protocol.TypeGitCommitRequest, Payload: payloadBytes}
+	protocol.WriteMessage(stream, req)
+
+	resp, err := protocol.ReadMessage(stream)
+	if err != nil {
+		color.Red("Error reading commit response: %v", err)
+		return
+	}
+
+	var respPayload protocol.GitCommitResponsePayload
+	if err := json.Unmarshal(resp.Payload, &respPayload); err != nil {
+		color.Red("Error parsing commit response payload: %v", err)
+		return
+	}
+
+	if !respPayload.Success {
+		color.Red("Commit failed:\n%s", respPayload.Output)
+	} else {
+		color.Green("Commit successful!")
+		color.Cyan("Output:")
+		fmt.Println(respPayload.Output)
+	}
 }
 
 func handleListBranches(stream network.Stream, repoAlias string) {
@@ -609,29 +751,160 @@ func handleSwitchBranch(stream network.Stream, state *clientState, branchName st
 	}
 
 	if !respPayload.Success {
-		fmt.Printf("Error from daemon:\n%s\n", respPayload.Output)
+		color.Red("Error from daemon:\n%s", respPayload.Output)
 	} else {
-		fmt.Printf("Daemon switched to branch '%s'.\n", branchName)
-		// --- IMPORTANT: Only change client state on success! ---
+		color.Green("Daemon switched to branch '%s'.", branchName)
 		state.currentBranch = branchName
+	}
+}
+
+func handleGitStatus(stream network.Stream, repoAlias string) {
+	reqPayload := protocol.GitStatusRequestPayload{RepoPath: repoAlias}
+	payloadBytes, _ := json.Marshal(reqPayload)
+	req := &protocol.Message{Type: protocol.TypeGitStatusRequest, Payload: payloadBytes}
+	protocol.WriteMessage(stream, req)
+	resp, _ := protocol.ReadMessage(stream)
+	var respPayload protocol.GitStatusResponsePayload
+	json.Unmarshal(resp.Payload, &respPayload)
+
+	color.Cyan("--- Git Status ---")
+	if !respPayload.Success {
+		color.Red("Error from daemon: %s", respPayload.Output)
+	} else {
+		fmt.Print(respPayload.Output)
+	}
+	color.Cyan("------------------")
+}
+
+func handleGitLog(stream network.Stream, repoAlias string) {
+	reqPayload := protocol.GitLogRequestPayload{RepoPath: repoAlias}
+	payloadBytes, _ := json.Marshal(reqPayload)
+	req := &protocol.Message{Type: protocol.TypeGitLogRequest, Payload: payloadBytes}
+	protocol.WriteMessage(stream, req)
+
+	resp, _ := protocol.ReadMessage(stream)
+	var respPayload protocol.GitLogResponsePayload
+	json.Unmarshal(resp.Payload, &respPayload)
+
+	if !respPayload.Success {
+		color.Red("Error from daemon: %s", respPayload.Output)
+	} else {
+		color.Cyan("--- Git Log ---")
+		fmt.Println(respPayload.Output)
+		color.Cyan("---------------")
+	}
+}
+
+func handleGitDiff(stream network.Stream, repoAlias, filePath string) {
+	reqPayload := protocol.GitDiffRequestPayload{RepoPath: repoAlias, FilePath: filePath}
+	payloadBytes, _ := json.Marshal(reqPayload)
+	req := &protocol.Message{Type: protocol.TypeGitDiffRequest, Payload: payloadBytes}
+	protocol.WriteMessage(stream, req)
+
+	resp, _ := protocol.ReadMessage(stream)
+	var respPayload protocol.GitDiffResponsePayload
+	json.Unmarshal(resp.Payload, &respPayload)
+
+	if !respPayload.Success {
+		color.Red("Error from daemon: %s", respPayload.Output)
+	} else {
+		color.Cyan("--- Git Diff ---")
+		fmt.Println(respPayload.Output)
+		color.Cyan("----------------")
+	}
+}
+
+func handleGitStashSave(stream network.Stream, repoAlias string) {
+	reqPayload := protocol.GitStashSaveRequestPayload{RepoPath: repoAlias}
+	payloadBytes, _ := json.Marshal(reqPayload)
+	req := &protocol.Message{Type: protocol.TypeGitStashSaveRequest, Payload: payloadBytes}
+	protocol.WriteMessage(stream, req)
+
+	resp, _ := protocol.ReadMessage(stream)
+	var respPayload protocol.GitStashSaveResponsePayload
+	json.Unmarshal(resp.Payload, &respPayload)
+
+	if !respPayload.Success {
+		color.Red("Error stashing changes:\n%s", respPayload.Output)
+	} else {
+		color.Green("--- Stash Result ---")
+		fmt.Print(respPayload.Output)
+		color.Green("--------------------")
+	}
+}
+
+func handleGitStashPop(stream network.Stream, repoAlias string) {
+	reqPayload := protocol.GitStashPopRequestPayload{RepoPath: repoAlias}
+	payloadBytes, _ := json.Marshal(reqPayload)
+	req := &protocol.Message{Type: protocol.TypeGitStashPopRequest, Payload: payloadBytes}
+	protocol.WriteMessage(stream, req)
+
+	resp, _ := protocol.ReadMessage(stream)
+	var respPayload protocol.GitStashPopResponsePayload
+	json.Unmarshal(resp.Payload, &respPayload)
+
+	if !respPayload.Success {
+		color.Red("Error popping stash:\n%s", respPayload.Output)
+	} else {
+		color.Green("--- Stash Pop Result ---")
+		fmt.Print(respPayload.Output)
+		color.Green("------------------------")
+	}
+}
+
+func handleGitReset(stream network.Stream, repoAlias string) {
+	color.Red("WARNING: This is a destructive operation. It will discard all uncommitted changes on the daemon.")
+	fmt.Print("Are you sure you want to proceed? (y/n): ")
+	reader := bufio.NewReader(os.Stdin)
+	answer, _ := reader.ReadString('\n')
+	answer = strings.TrimSpace(answer)
+	if answer != "y" {
+		fmt.Println("Reset aborted.")
+		return
+	}
+
+	reqPayload := protocol.GitResetRequestPayload{RepoPath: repoAlias}
+	payloadBytes, _ := json.Marshal(reqPayload)
+	req := &protocol.Message{Type: protocol.TypeGitResetRequest, Payload: payloadBytes}
+	protocol.WriteMessage(stream, req)
+
+	resp, _ := protocol.ReadMessage(stream)
+	var respPayload protocol.GitResetResponsePayload
+	json.Unmarshal(resp.Payload, &respPayload)
+
+	if !respPayload.Success {
+		color.Red("Error from daemon: %s", respPayload.Output)
+	} else {
+		color.Green("--- Reset Result ---")
+		fmt.Print(respPayload.Output)
+		color.Green("--------------------")
 	}
 }
 
 func printHelp() {
 	fmt.Println("Available commands:")
-	fmt.Println("  help          Show this help message")
-	fmt.Println("  ls-repos      List available repositories on the daemon")
-	fmt.Println("  use <repo>    Switch context to a repository")
-	fmt.Println("  ls            List files in the current repository")
-	fmt.Println("  cat <file>    Display content of a remote file")
-	fmt.Println("  edit <file>   Download, edit, and upload a file")
-	fmt.Println("  rename <old> <new> Rename a remote file")
-	fmt.Println("  branch <name> Create a new branch on the daemon")
-	fmt.Println("  commit <msg>  Commit all changes in the repo and push to the current branch")
-	fmt.Println("  branches      List branches in the current repository")
-	fmt.Println("  switch <name> Switch to a different branch")
-	fmt.Println("  link <alias> <path>  Dynamically link a new repository on the daemon")
-	fmt.Println("  exit, quit    Close the application")
+	c := color.New(color.FgYellow)
+	d := color.New(color.FgWhite)
+
+	c.Println("  help          ", d.Sprint("Show this help message"))
+	c.Println("  ls-repos      ", d.Sprint("List available repositories on the daemon"))
+	c.Println("  use <repo>    ", d.Sprint("Switch context to a repository"))
+	c.Println("  ls            ", d.Sprint("List files in the current repository"))
+	c.Println("  cat <file>    ", d.Sprint("Display content of a remote file"))
+	c.Println("  edit <file>   ", d.Sprint("Download, edit, and upload a file"))
+	c.Println("  rename <old> <new> ", d.Sprint("Rename a remote file"))
+	c.Println("  branch <name> ", d.Sprint("Create a new branch on the daemon"))
+	c.Println("  commit <msg>  ", d.Sprint("Commit all changes in the repo and push to the current branch"))
+	c.Println("  branches      ", d.Sprint("List branches in the current repository"))
+	c.Println("  switch <name> ", d.Sprint("Switch to a different branch"))
+	c.Println("  link <alias> <path>  ", d.Sprint("Dynamically link a new repository on the daemon"))
+	c.Println("  status        ", d.Sprint("Show the working tree status on the daemon"))
+	c.Println("  log           ", d.Sprint("Show recent commit history"))
+	c.Println("  diff [file]   ", d.Sprint("Show changes between commits, commit and working tree, etc"))
+	c.Println("  stash         ", d.Sprint("Stash changes in the current repository"))
+	c.Println("  stash-pop     ", d.Sprint("Apply the most recent stash"))
+	c.Println("  reset         ", d.Sprint("Discard all local changes (DESTRUCTIVE)"))
+	c.Println("  exit, quit    ", d.Sprint("Close the application"))
 }
 
 func (s *clientState) changeLivePrefix() (string, bool) {
@@ -657,6 +930,12 @@ func completer(d prompt.Document) []prompt.Suggest {
 		{Text: "branches", Description: "List branches in the current repository"},
 		{Text: "switch", Description: "Switch to a different branch"},
 		{Text: "link", Description: "Link a new repository on the daemon"},
+		{Text: "status", Description: "Show the daemon's git status"},
+		{Text: "log", Description: "Show recent commit history"},
+		{Text: "diff", Description: "Show changes to files"},
+		{Text: "stash", Description: "Stash changes in the current repository"},
+		{Text: "stash-pop", Description: "Apply the most recent stash"},
+		{Text: "reset", Description: "Discard all local changes (DESTRUCTIVE)"},
 		{Text: "exit", Description: "Exit the shell"},
 	}
 	return prompt.FilterHasPrefix(s, d.GetWordBeforeCursor(), true)
