@@ -1,22 +1,66 @@
 # p2p-git-commit
 
+**Note:** This project was originally prototyped in Rust, but switched to Go for easier cross-platform support and simpler libp2p integration.
+
 A peer-to-peer Git remote and command relay system using Go and libp2p. This project enables secure, NAT-traversing Git operations and file access between devices without a central server.
 
 ## Features
 
 - **Peer-to-peer Git remote**: Push, commit, and manage repositories over libp2p
-- **Persistent identity**: Both client and daemon use persistent private keys for secure, repeatable identity
-- **Trust model**: Daemon requires handshake approval for new clients (like SSH key acceptance)
-- **Repository listing**: List all repositories linked to the daemon (`ls-repos`)
-- **File listing**: List all files in a repository, including files in the root and subdirectories (`ls`)
-- **File reading**: View the content of any file in the repository (`cat <file>`) 
-- **File editing**: Download, edit locally in your favorite editor, and upload changes back to the daemon (`edit <file>`) 
-- **File renaming**: Rename files in the repository (`rename <old> <new>`) 
-- **Branch creation**: Create new branches on the daemon (`branch <name>`) 
-- **Robust commit and push**: Commits are always made to the correct branch (client context is respected)
-- **Tab completion and help**: Interactive REPL client with command completion and contextual help
-- **Security**: Path traversal protection, explicit trust, and repository aliasing
-- **Debug logging**: Daemon logs all file operations and requests for easy troubleshooting
+- **Interactive REPL client**: SSH-like command interface with tab completion
+- **Multi-repo support**: Manage multiple Git repositories through a single daemon
+- **File operations**: List, read, edit, and rename files remotely
+- **Branch management**: Create, list, and switch between branches
+- **Dynamic repo linking**: Add repositories without restarting the daemon
+- **Persistent identity**: Secure, repeatable identity with private keys
+- **Trust model**: Handshake approval for new clients (like SSH)
+- **Security**: Path traversal protection and repository aliasing
+- **Debug logging**: Comprehensive logging for troubleshooting
+
+## Multi-Repository Support
+
+The system supports managing multiple Git repositories through a single daemon instance:
+
+### Repository Management
+- **Dynamic linking**: Add repositories on-the-fly with `link <alias> <path>`
+- **Persistent storage**: Repositories saved to `linked_repos.json` for persistence
+- **Context switching**: Use `use <repo-alias>` to switch between repositories
+- **Repository listing**: `ls-repos` shows all available repositories
+
+### Example Multi-Repo Workflow
+```bash
+# List available repositories
+p2p-git(no repo)> ls-repos
+--- Available Repositories ---
+- my-project
+- another-repo
+- docs
+------------------------------
+
+# Switch to a repository
+p2p-git(no repo)> use my-project
+Switched to repo: my-project
+
+# Work in my-project context
+p2p-git(my-project @ main)> ls
+README.md
+src/main.go
+
+# Add a new repository dynamically
+p2p-git(my-project @ main)> link new-repo /path/to/new/repo
+Successfully linked 'new-repo' on daemon.
+
+# Switch to the new repository
+p2p-git(my-project @ main)> use new-repo
+Switched to repo: new-repo
+```
+
+## Recent Additions
+
+- **Branch switching**: `switch <branch>` now actually changes the daemon's branch
+- **Dynamic repo linking**: `link <alias> <path>` adds repos without daemon restart
+- **Smart validation**: Commands validate operations before changing client state
+- **Persistent storage**: Repositories saved to `linked_repos.json` for persistence
 
 ## SSH-like Usage & Testing
 
@@ -101,10 +145,6 @@ Successfully pushed to origin/feature-x
 - All code is in Go, using libp2p for networking.
 - To test, run the daemon and client on different machines or VMs, or use localhost for local testing.
 - The workflow is similar to SSH: connect, operate, disconnect.
-
----
-
-**Note:** This project was originally prototyped in Rust, but switched to Go for easier cross-platform support and simpler libp2p integration.
 
 ## Getting Started
 

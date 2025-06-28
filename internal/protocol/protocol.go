@@ -61,6 +61,18 @@ const (
 	// New for git branches
 	TypeCreateBranchRequest  = "CREATE_BRANCH_REQUEST"
 	TypeCreateBranchResponse = "CREATE_BRANCH_RESPONSE"
+
+	// New for branch listing
+	TypeListBranchesRequest  = "LIST_BRANCHES_REQUEST"
+	TypeListBranchesResponse = "LIST_BRANCHES_RESPONSE"
+
+	// New for dynamic repo linking
+	TypeLinkRepoRequest  = "LINK_REPO_REQUEST"
+	TypeLinkRepoResponse = "LINK_REPO_RESPONSE"
+
+	// New for branch switching
+	TypeSwitchBranchRequest  = "SWITCH_BRANCH_REQUEST"
+	TypeSwitchBranchResponse = "SWITCH_BRANCH_RESPONSE"
 )
 
 // New Payloads
@@ -117,6 +129,36 @@ type CreateBranchRequestPayload struct {
 }
 
 type CreateBranchResponsePayload struct {
+	Success bool   `json:"success"`
+	Output  string `json:"output"` // To return git's output
+}
+
+type ListBranchesRequestPayload struct {
+	RepoPath string `json:"repo_path"`
+}
+
+type ListBranchesResponsePayload struct {
+	Success  bool     `json:"success"`
+	Branches []string `json:"branches"`
+	Error    string   `json:"error,omitempty"`
+}
+
+type LinkRepoRequestPayload struct {
+	Alias string `json:"alias"`
+	Path  string `json:"path"`
+}
+
+type LinkRepoResponsePayload struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+}
+
+type SwitchBranchRequestPayload struct {
+	RepoPath   string `json:"repo_path"`
+	BranchName string `json:"branch_name"`
+}
+
+type SwitchBranchResponsePayload struct {
 	Success bool   `json:"success"`
 	Output  string `json:"output"` // To return git's output
 }

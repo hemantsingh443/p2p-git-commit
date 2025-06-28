@@ -120,7 +120,7 @@ func executor(state *clientState) func(s string) {
 		// --- FIX: Only create a stream for commands that need it ---
 		needsStream := true
 		switch command {
-		case "exit", "quit", "help", "use":
+		case "exit", "quit", "help":
 			needsStream = false
 		}
 
@@ -148,8 +148,7 @@ func executor(state *clientState) func(s string) {
 				fmt.Println("Usage: use <repo-alias>")
 				return
 			}
-			state.currentRepo = args[0]
-			fmt.Printf("Switched to repo: %s\n", state.currentRepo)
+			handleUseRepo(stream, state, args[0])
 
 		// --- Commands that need a stream ---
 		case "ls-repos":
@@ -169,9 +168,7 @@ func executor(state *clientState) func(s string) {
 				fmt.Println("Usage: branch <new-branch-name>")
 				return
 			}
-			handleCreateBranch(stream, state.currentRepo, args[0])
-			state.currentBranch = args[0]
-			fmt.Printf("Client context switched to new branch: %s\n", state.currentBranch)
+			handleCreateBranch(stream, state, args[0])
 		case "commit":
 			if state.currentRepo == "" {
 				fmt.Println("No repository selected.")
@@ -183,6 +180,28 @@ func executor(state *clientState) func(s string) {
 			}
 			msg := strings.Join(args, " ")
 			handleCommit(stream, state.currentRepo, state.currentBranch, msg)
+		case "branches":
+			if state.currentRepo == "" {
+				fmt.Println("No repository selected.")
+				return
+			}
+			handleListBranches(stream, state.currentRepo)
+		case "switch":
+			if state.currentRepo == "" {
+				fmt.Println("No repository selected.")
+				return
+			}
+			if len(args) < 1 {
+				fmt.Println("Usage: switch <branch-name>")
+				return
+			}
+			handleSwitchBranch(stream, state, args[0])
+		case "link":
+			if len(args) < 2 {
+				fmt.Println("Usage: link <alias> <absolute-path-on-daemon>")
+				return
+			}
+			handleLinkRepo(stream, args[0], args[1])
 		case "rename":
 			if state.currentRepo == "" {
 				fmt.Println("No repository selected.")
@@ -313,20 +332,31 @@ func handleListFiles(stream network.Stream, repoAlias string) {
 	}
 }
 
-func handleCreateBranch(stream network.Stream, repoAlias, newBranch string) {
-	reqPayload := protocol.CreateBranchRequestPayload{RepoPath: repoAlias, NewBranchName: newBranch}
+func handleCreateBranch(stream network.Stream, state *clientState, newBranch string) {
+	reqPayload := protocol.CreateBranchRequestPayload{RepoPath: state.currentRepo, NewBranchName: newBranch}
 	payloadBytes, _ := json.Marshal(reqPayload)
 	req := &protocol.Message{Type: protocol.TypeCreateBranchRequest, Payload: payloadBytes}
 	protocol.WriteMessage(stream, req)
 
-	resp, _ := protocol.ReadMessage(stream)
+	resp, err := protocol.ReadMessage(stream)
+	if err != nil {
+		fmt.Printf("Error reading branch response: %v\n", err)
+		return
+	}
+
 	var respPayload protocol.CreateBranchResponsePayload
-	json.Unmarshal(resp.Payload, &respPayload)
+	if err := json.Unmarshal(resp.Payload, &respPayload); err != nil {
+		fmt.Printf("Error parsing branch response payload: %v\n", err)
+		return
+	}
 
 	if !respPayload.Success {
 		fmt.Printf("Error creating branch: %s\n", respPayload.Output)
 	} else {
 		fmt.Println("Branch created successfully on daemon.")
+		// --- IMPORTANT: Only change client state on success! ---
+		state.currentBranch = newBranch
+		fmt.Printf("Client context switched to new branch: %s\n", state.currentBranch)
 	}
 }
 
@@ -502,6 +532,91 @@ func handleCommit(stream network.Stream, repo, branch, msg string) {
 	fmt.Println("----------------------------------------")
 }
 
+func handleListBranches(stream network.Stream, repoAlias string) {
+	reqPayload := protocol.ListBranchesRequestPayload{RepoPath: repoAlias}
+	payloadBytes, _ := json.Marshal(reqPayload)
+	req := &protocol.Message{Type: protocol.TypeListBranchesRequest, Payload: payloadBytes}
+	protocol.WriteMessage(stream, req)
+
+	resp, err := protocol.ReadMessage(stream)
+	if err != nil {
+		fmt.Printf("Error reading branches response: %v\n", err)
+		return
+	}
+
+	var respPayload protocol.ListBranchesResponsePayload
+	if err := json.Unmarshal(resp.Payload, &respPayload); err != nil {
+		fmt.Printf("Error parsing branches response payload: %v\n", err)
+		return
+	}
+
+	if !respPayload.Success {
+		fmt.Printf("Error from daemon: %s\n", respPayload.Error)
+		return
+	}
+
+	fmt.Println("--- Available Branches ---")
+	for _, branch := range respPayload.Branches {
+		fmt.Println(branch)
+	}
+	fmt.Println("------------------------------")
+}
+
+func handleLinkRepo(stream network.Stream, alias, path string) {
+	reqPayload := protocol.LinkRepoRequestPayload{Alias: alias, Path: path}
+	payloadBytes, _ := json.Marshal(reqPayload)
+	req := &protocol.Message{Type: protocol.TypeLinkRepoRequest, Payload: payloadBytes}
+	protocol.WriteMessage(stream, req)
+
+	resp, err := protocol.ReadMessage(stream)
+	if err != nil {
+		fmt.Printf("Error reading link response: %v\n", err)
+		return
+	}
+
+	var respPayload protocol.LinkRepoResponsePayload
+	if err := json.Unmarshal(resp.Payload, &respPayload); err != nil {
+		fmt.Printf("Error parsing link response payload: %v\n", err)
+		return
+	}
+
+	if !respPayload.Success {
+		fmt.Printf("Failed to link repo: %s\n", respPayload.Error)
+	} else {
+		fmt.Printf("Successfully linked '%s' on daemon.\n", alias)
+	}
+}
+
+func handleSwitchBranch(stream network.Stream, state *clientState, branchName string) {
+	reqPayload := protocol.SwitchBranchRequestPayload{
+		RepoPath:   state.currentRepo,
+		BranchName: branchName,
+	}
+	payloadBytes, _ := json.Marshal(reqPayload)
+	req := &protocol.Message{Type: protocol.TypeSwitchBranchRequest, Payload: payloadBytes}
+	protocol.WriteMessage(stream, req)
+
+	resp, err := protocol.ReadMessage(stream)
+	if err != nil {
+		fmt.Printf("Error reading switch response: %v\n", err)
+		return
+	}
+
+	var respPayload protocol.SwitchBranchResponsePayload
+	if err := json.Unmarshal(resp.Payload, &respPayload); err != nil {
+		fmt.Printf("Error parsing switch response payload: %v\n", err)
+		return
+	}
+
+	if !respPayload.Success {
+		fmt.Printf("Error from daemon:\n%s\n", respPayload.Output)
+	} else {
+		fmt.Printf("Daemon switched to branch '%s'.\n", branchName)
+		// --- IMPORTANT: Only change client state on success! ---
+		state.currentBranch = branchName
+	}
+}
+
 func printHelp() {
 	fmt.Println("Available commands:")
 	fmt.Println("  help          Show this help message")
@@ -513,6 +628,9 @@ func printHelp() {
 	fmt.Println("  rename <old> <new> Rename a remote file")
 	fmt.Println("  branch <name> Create a new branch on the daemon")
 	fmt.Println("  commit <msg>  Commit all changes in the repo and push to the current branch")
+	fmt.Println("  branches      List branches in the current repository")
+	fmt.Println("  switch <name> Switch to a different branch")
+	fmt.Println("  link <alias> <path>  Dynamically link a new repository on the daemon")
 	fmt.Println("  exit, quit    Close the application")
 }
 
@@ -536,7 +654,38 @@ func completer(d prompt.Document) []prompt.Suggest {
 		{Text: "rename", Description: "Rename a file. Usage: rename <old> <new>"},
 		{Text: "branch", Description: "Create a new git branch"},
 		{Text: "commit", Description: "Commit all changes with a message"},
+		{Text: "branches", Description: "List branches in the current repository"},
+		{Text: "switch", Description: "Switch to a different branch"},
+		{Text: "link", Description: "Link a new repository on the daemon"},
 		{Text: "exit", Description: "Exit the shell"},
 	}
 	return prompt.FilterHasPrefix(s, d.GetWordBeforeCursor(), true)
+}
+
+func handleUseRepo(stream network.Stream, state *clientState, repoAlias string) {
+	// We validate the repo by asking for its branches. If this succeeds, the repo exists.
+	reqPayload := protocol.ListBranchesRequestPayload{RepoPath: repoAlias}
+	payloadBytes, _ := json.Marshal(reqPayload)
+	req := &protocol.Message{Type: protocol.TypeListBranchesRequest, Payload: payloadBytes}
+	protocol.WriteMessage(stream, req)
+
+	resp, err := protocol.ReadMessage(stream)
+	if err != nil {
+		fmt.Printf("Error communicating with daemon: %v\n", err)
+		return
+	}
+
+	var respPayload protocol.ListBranchesResponsePayload
+	if err := json.Unmarshal(resp.Payload, &respPayload); err != nil {
+		fmt.Printf("Error parsing response: %v\n", err)
+		return
+	}
+
+	if !respPayload.Success {
+		fmt.Printf("Error: Cannot use repo '%s'. Daemon responded: %s\n", repoAlias, respPayload.Error)
+	} else {
+		// Only change state on success!
+		state.currentRepo = repoAlias
+		fmt.Printf("Switched to repo: %s\n", state.currentRepo)
+	}
 }

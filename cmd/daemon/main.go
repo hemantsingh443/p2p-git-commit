@@ -26,16 +26,26 @@ import (
 var trustStore *store.TrustStore
 var linkedRepos map[string]string // Alias -> Path
 
+const linkedReposFile = "linked_repos.json"
+
 func main() {
 	// Command-line flags
 	listenPort := flag.Int("port", 4001, "Port to listen on")
 	repoFlag := flag.String("repo", "", "Alias and path to a git repo (e.g., my-project:/path/to/your/repo)")
 	flag.Parse()
 
-	if *repoFlag == "" {
-		log.Fatal("You must link at least one repository using the -repo flag.")
+	// --- NEW: Load linked repos from file ---
+	loadLinkedRepos()
+
+	// If the file is empty and no flag is provided, we still need one repo.
+	if len(linkedRepos) == 0 && *repoFlag == "" {
+		log.Fatal("You must link at least one repository using the -repo flag on first run, or have a linked_repos.json file.")
 	}
-	parseRepoFlag(*repoFlag)
+	// The flag can be used to add a repo on startup
+	if *repoFlag != "" {
+		parseRepoFlag(*repoFlag)
+		saveLinkedRepos() // Save it immediately
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -96,7 +106,6 @@ func main() {
 }
 
 func parseRepoFlag(repoFlag string) {
-	linkedRepos = make(map[string]string)
 	parts := strings.Split(repoFlag, ":")
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		log.Fatalf("Invalid repo flag format. Use 'alias:/path/to/repo'")
@@ -206,6 +215,12 @@ func handleTrustedStream(stream network.Stream) {
 		handleRenameFile(stream, msg.Payload)
 	case protocol.TypeWriteFileRequest:
 		handleWriteFile(stream, msg.Payload)
+	case protocol.TypeListBranchesRequest:
+		handleListBranches(stream, msg.Payload)
+	case protocol.TypeLinkRepoRequest:
+		handleLinkRepo(stream, msg.Payload)
+	case protocol.TypeSwitchBranchRequest:
+		handleSwitchBranch(stream, msg.Payload)
 	default:
 		log.Printf("Received unknown message type from trusted peer: %s", msg.Type)
 	}
@@ -470,10 +485,133 @@ func handleRenameFile(stream network.Stream, rawPayload json.RawMessage) {
 	protocol.WriteMessage(stream, response)
 }
 
+func handleListBranches(stream network.Stream, rawPayload json.RawMessage) {
+	var payload protocol.ListBranchesRequestPayload
+	if err := json.Unmarshal(rawPayload, &payload); err != nil {
+		log.Printf("Error unmarshalling list branches request: %v", err)
+		return
+	}
+	log.Printf("Handling ListBranches request for repo %s", payload.RepoPath)
+
+	respPayload := protocol.ListBranchesResponsePayload{}
+	repoPath, ok := linkedRepos[payload.RepoPath]
+	if !ok {
+		respPayload.Success = false
+		respPayload.Error = "unknown repository alias"
+	} else {
+		// git branch --format "%(refname:short)" is a clean way to get just branch names
+		cmd := exec.Command("git", "branch", "--format", "%(refname:short)")
+		cmd.Dir = repoPath
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			respPayload.Success = false
+			respPayload.Error = string(out)
+		} else {
+			respPayload.Success = true
+			// Split by newlines and filter out empty strings
+			branchList := strings.Split(strings.TrimSpace(string(out)), "\n")
+			var branches []string
+			for _, branch := range branchList {
+				if strings.TrimSpace(branch) != "" {
+					branches = append(branches, strings.TrimSpace(branch))
+				}
+			}
+			respPayload.Branches = branches
+		}
+	}
+
+	payloadBytes, _ := json.Marshal(respPayload)
+	response := &protocol.Message{Type: protocol.TypeListBranchesResponse, Payload: payloadBytes}
+	protocol.WriteMessage(stream, response)
+}
+
+func handleLinkRepo(stream network.Stream, rawPayload json.RawMessage) {
+	var payload protocol.LinkRepoRequestPayload
+	if err := json.Unmarshal(rawPayload, &payload); err != nil {
+		log.Printf("Error unmarshalling link repo request: %v", err)
+		return
+	}
+	log.Printf("Handling LinkRepo request for alias %s", payload.Alias)
+
+	respPayload := protocol.LinkRepoResponsePayload{}
+	// On the daemon, the path is expected to be an absolute path
+	// A real-world app might have more security here.
+	absPath, err := filepath.Abs(payload.Path)
+	if err != nil {
+		respPayload.Success = false
+		respPayload.Error = fmt.Sprintf("Invalid path: %v", err)
+	} else {
+		linkedRepos[payload.Alias] = absPath
+		if err := saveLinkedRepos(); err != nil {
+			respPayload.Success = false
+			respPayload.Error = fmt.Sprintf("Failed to save repo list: %v", err)
+		} else {
+			respPayload.Success = true
+		}
+	}
+
+	payloadBytes, _ := json.Marshal(respPayload)
+	response := &protocol.Message{Type: protocol.TypeLinkRepoResponse, Payload: payloadBytes}
+	protocol.WriteMessage(stream, response)
+}
+
+func handleSwitchBranch(stream network.Stream, rawPayload json.RawMessage) {
+	var payload protocol.SwitchBranchRequestPayload
+	if err := json.Unmarshal(rawPayload, &payload); err != nil {
+		log.Printf("Error unmarshalling switch branch request: %v", err)
+		return
+	}
+	log.Printf("Handling SwitchBranch request for repo %s to branch %s", payload.RepoPath, payload.BranchName)
+
+	respPayload := protocol.SwitchBranchResponsePayload{}
+	repoPath, ok := linkedRepos[payload.RepoPath]
+	if !ok {
+		respPayload.Success = false
+		respPayload.Output = "Error: unknown repository alias"
+	} else {
+		cmd := exec.Command("git", "checkout", payload.BranchName)
+		cmd.Dir = repoPath
+		out, err := cmd.CombinedOutput()
+
+		respPayload.Success = (err == nil)
+		respPayload.Output = string(out)
+	}
+
+	payloadBytes, _ := json.Marshal(respPayload)
+	response := &protocol.Message{Type: protocol.TypeSwitchBranchResponse, Payload: payloadBytes}
+	protocol.WriteMessage(stream, response)
+}
+
 func getRepoAliases() []string {
 	keys := make([]string, 0, len(linkedRepos))
 	for k := range linkedRepos {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+// NEW Function: Load repos from JSON file
+func loadLinkedRepos() {
+	linkedRepos = make(map[string]string)
+	data, err := os.ReadFile(linkedReposFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Println("linked_repos.json not found, starting with empty repo list.")
+			return
+		}
+		log.Fatalf("Failed to read linked repos file: %v", err)
+	}
+	if err := json.Unmarshal(data, &linkedRepos); err != nil {
+		log.Fatalf("Failed to parse linked repos file: %v", err)
+	}
+	log.Printf("Loaded %d linked repos from %s", len(linkedRepos), linkedReposFile)
+}
+
+// NEW Function: Save repos to JSON file
+func saveLinkedRepos() error {
+	data, err := json.MarshalIndent(linkedRepos, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(linkedReposFile, data, 0644)
 }

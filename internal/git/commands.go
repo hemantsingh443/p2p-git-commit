@@ -6,25 +6,17 @@ import (
 	"strings"
 )
 
-// CommitAndPush performs `git checkout`, `git add`, `git commit`, and `git push`.
+// CommitAndPush performs `git add`, `git commit`, and `git push`.
 func CommitAndPush(repoPath, commitMessage, remote, branch string) (string, error) {
-	// Step 1: Git Checkout. Switch to the correct branch first.
-	cmdCheckout := exec.Command("git", "checkout", branch)
-	cmdCheckout.Dir = repoPath
-	out, err := cmdCheckout.CombinedOutput()
-	if err != nil {
-		return string(out), fmt.Errorf("git checkout failed: %w", err)
-	}
-
-	// Step 2: Git Add
+	// Step 1: Git Add
 	cmdAdd := exec.Command("git", "add", ".")
 	cmdAdd.Dir = repoPath
-	out, err = cmdAdd.CombinedOutput()
+	out, err := cmdAdd.CombinedOutput()
 	if err != nil {
 		return string(out), fmt.Errorf("git add failed: %w", err)
 	}
 
-	// Step 3: Git Commit
+	// Step 2: Git Commit
 	cmdCommit := exec.Command("git", "commit", "-m", commitMessage)
 	cmdCommit.Dir = repoPath
 	out, err = cmdCommit.CombinedOutput()
@@ -37,7 +29,7 @@ func CommitAndPush(repoPath, commitMessage, remote, branch string) (string, erro
 		return string(out), fmt.Errorf("git commit failed: %w", err)
 	}
 
-	// Step 4: Git Push
+	// Step 3: Git Push
 	cmdPush := exec.Command("git", "push", remote, branch)
 	cmdPush.Dir = repoPath
 	out, err = cmdPush.CombinedOutput()
