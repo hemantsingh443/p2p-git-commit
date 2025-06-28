@@ -1,4 +1,4 @@
-# p2p-git-remote
+# p2p-git-commit
 
 A peer-to-peer Git remote and command relay system using Go and libp2p. This project enables secure, NAT-traversing Git operations and file access between devices without a central server.
 
