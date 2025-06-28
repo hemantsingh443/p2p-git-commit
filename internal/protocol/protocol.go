@@ -49,6 +49,18 @@ const (
 	TypeReadFileResponse  = "READ_FILE_RESPONSE"
 	TypeWriteFileRequest  = "WRITE_FILE_REQUEST"
 	TypeWriteFileResponse = "WRITE_FILE_RESPONSE"
+
+	// New for file listing
+	TypeListFilesRequest  = "LIST_FILES_REQUEST"
+	TypeListFilesResponse = "LIST_FILES_RESPONSE"
+
+	// New for file management
+	TypeRenameFileRequest  = "RENAME_FILE_REQUEST"
+	TypeRenameFileResponse = "RENAME_FILE_RESPONSE"
+
+	// New for git branches
+	TypeCreateBranchRequest  = "CREATE_BRANCH_REQUEST"
+	TypeCreateBranchResponse = "CREATE_BRANCH_RESPONSE"
 )
 
 // New Payloads
@@ -76,6 +88,37 @@ type WriteFileRequestPayload struct {
 type WriteFileResponsePayload struct {
 	Success bool   `json:"success"`
 	Error   string `json:"error,omitempty"`
+}
+
+type ListFilesRequestPayload struct {
+	RepoPath string `json:"repo_path"`
+}
+
+type ListFilesResponsePayload struct {
+	Success bool     `json:"success"`
+	Files   []string `json:"files"`
+	Error   string   `json:"error,omitempty"`
+}
+
+type RenameFileRequestPayload struct {
+	RepoPath string `json:"repo_path"`
+	OldPath  string `json:"old_path"`
+	NewPath  string `json:"new_path"`
+}
+
+type RenameFileResponsePayload struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+}
+
+type CreateBranchRequestPayload struct {
+	RepoPath      string `json:"repo_path"`
+	NewBranchName string `json:"new_branch_name"`
+}
+
+type CreateBranchResponsePayload struct {
+	Success bool   `json:"success"`
+	Output  string `json:"output"` // To return git's output
 }
 
 // ReadMessage reads a JSON message from a stream.
