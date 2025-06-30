@@ -20,9 +20,11 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
 
+	tea "github.com/charmbracelet/bubbletea"
 	p2p "github.com/hemantsingh443/p2p-git-remote/internal/p2p"
 	"github.com/hemantsingh443/p2p-git-remote/internal/protocol"
 	"github.com/hemantsingh443/p2p-git-remote/internal/store"
+	"github.com/hemantsingh443/p2p-git-remote/internal/tui"
 )
 
 // clientState holds the application's current state.
@@ -85,7 +87,7 @@ func (cm *ConfigManager) AddDaemon(name, addr string) {
 func main() {
 	if len(os.Args) < 2 {
 		// Updated usage message
-		fmt.Println("Usage: ./client <daemon-name> | link <new-daemon-name>")
+		fmt.Println("Usage: ./client <daemon-name> [tui] | link <new-daemon-name>")
 		os.Exit(1)
 	}
 
@@ -125,8 +127,14 @@ func main() {
 		return // Exit after linking
 	}
 
-	// --- MODE 2: Connecting to an existing daemon ---
+	// --- NEW LOGIC: Check for 'tui' command ---
+	isTuiMode := false
 	daemonName := command
+	if len(os.Args) > 2 && os.Args[2] == "tui" {
+		isTuiMode = true
+	}
+
+	// --- MODE 2: Connecting to an existing daemon ---
 	daemonAddr, ok := configManager.Config[daemonName]
 	if !ok {
 		color.Red("Error: Daemon name '%s' not found in your config file.", daemonName)
@@ -134,8 +142,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// --- The rest of the main function remains the same ---
-	// It connects and starts the REPL using `daemonAddr` from the config.
 	ctx := context.Background()
 
 	// Load or generate persistent identity
@@ -174,24 +180,40 @@ func main() {
 		fmt.Println("Daemon is already trusted.")
 	}
 
-	// --- Initialize State and Start REPL ---
-	state := &clientState{
-		p2pHost:       h,
-		daemonInfo:    *addrInfo,
-		trustStore:    trustStore,
-		currentRepo:   "",
-		currentBranch: "master", // Default
-		livePrefix:    "p2p-git(no repo)> ",
+	// --- The final part of main is now a switch ---
+	// We pass the core client state to both modes
+	appState := &tui.AppState{
+		P2pHost:       h,
+		DaemonInfo:    *addrInfo,
+		CurrentRepo:   "my-project", // You might want to make this selectable
+		CurrentBranch: "master",
 	}
 
-	p := prompt.New(
-		executor(state),
-		completer,
-		prompt.OptionPrefix(state.livePrefix),
-		prompt.OptionTitle("p2p-git-remote"),
-		prompt.OptionLivePrefix(state.changeLivePrefix),
-	)
-	p.Run()
+	if isTuiMode {
+		// --- LAUNCH TUI MODE ---
+		p := tea.NewProgram(tui.NewModel(appState), tea.WithAltScreen())
+		if _, err := p.Run(); err != nil {
+			log.Fatalf("Error running TUI: %v", err)
+		}
+	} else {
+		// --- LAUNCH REPL MODE (your existing code) ---
+		state := &clientState{
+			p2pHost:       h,
+			daemonInfo:    *addrInfo,
+			trustStore:    trustStore,
+			currentRepo:   "",
+			currentBranch: "master", // Default
+			livePrefix:    "p2p-git(no repo)> ",
+		}
+		p := prompt.New(
+			executor(state),
+			completer,
+			prompt.OptionPrefix(state.livePrefix),
+			prompt.OptionTitle("p2p-git-remote"),
+			prompt.OptionLivePrefix(state.changeLivePrefix),
+		)
+		p.Run()
+	}
 }
 
 // executor is the heart of the REPL. It parses and executes commands.

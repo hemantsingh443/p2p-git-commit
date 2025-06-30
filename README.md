@@ -1,6 +1,6 @@
 # p2p-git-commit
 
-**Note:** This project was originally prototyped in Rust, but switched to Go for easier cross-platform support and simpler libp2p integration.
+**Note:** I was originally doing it in Rust, but switched to Go for easier cross-platform support and simpler libp2p integration.(JNA sucks for android, couldnt get the SDK working properly and libp2p is a mess)
 
 A peer-to-peer Git remote and command relay system using Go and libp2p. This project enables secure, NAT-traversing Git operations and file access between devices without a central server.
 
@@ -195,11 +195,55 @@ Successfully pushed to origin/feature-x
 - If `ls` shows zero files, check the daemon log for the absolute path being walked.
 - If you see permission errors, ensure the daemon has access to the repo directory.
 
+## TUI (Terminal User Interface)
+
+A new TUI mode is available for the client, providing a split-pane, keyboard-driven interface inspired by tools like lazygit. The TUI is in early development and is functional but not yet as robust as the REPL. Expect rough edges and missing features.
+
+### Launching the TUI
+
+```sh
+./client <daemon-name> tui
+```
+
+### Key Bindings
+
+- `1`/`2`/`3`: Switch between Files, Commits, and Branches views
+- `Tab`: Switch focus between navigation and preview panes
+- `Enter`: 
+  - In Files: Preview diff
+  - In Branches: Switch branch (optimistic UI update)
+- `C`: Start a commit (opens input box for message)
+- `S`: Stash changes
+- `e`: Edit selected file (opens $EDITOR)
+- `l`: Show git log in preview
+- `s`: Show git status in preview
+- `?`: Show help
+- `q`/`Ctrl+C`: Quit
+
+### Current State of the TUI
+
+- **Basic navigation**: Files, commits, and branches can be browsed.
+- **Branch switching**: Works, with optimistic UI update.
+- **Stash and commit**: Supported, with input box for commit messages.
+- **Editing**: Opens files in $EDITOR, but **changes are not yet synced back to the daemon** (edit is not fully implemented).
+- **Preview**: Diff and file content preview with syntax highlighting.
+- **Limitations**:
+  - Edit feature is not fully implemented: editing only opens the file locally, and does not sync changes to the remote repo.
+  - No mouse support.
+  - No file upload/download from the TUI.
+  - No error popups or advanced notifications.
+  - UI/UX is basic and may be confusing for new users.
+  - Not all REPL features are available yet.
+
+**Feedback and contributions are welcome!**
+
 ## Roadmap
 - [x] Interactive REPL client
 - [x] File listing, reading, editing, renaming
 - [x] Branch creation and correct commit branch
 - [x] Robust path handling
+- [x] TUI (Terminal UI) prototype (early, rough)
+- [ ] TUI: Improved UX, error handling, and feature parity with REPL
 - [ ] Multi-repo support (multiple -repo flags)
 - [ ] File upload/download (binary, large files)
 - [ ] More granular permissions
